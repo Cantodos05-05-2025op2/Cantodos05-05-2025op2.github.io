@@ -1,1 +1,347 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="style-jwp.css" />
+    <link rel="stylesheet" href="style.css" />
+    <script src="can.js"></script>
+    
+    <script src="https://ssl.p.jwpcdn.com/player/v/8.26.0/jwplayer.js"></script>
+  </head>
+  <body>
 
+    
+      <div id="player" allow="fullscreen; screen-orientation-lock">
+      <div class="homeScreen"><span id="appError"></span><div class="loader"></div></div>
+    
+      <div id="loading-message" class="message-container">
+        <div class="message-box">
+            <div class="loading-spinner"></div>
+            <div class="message-title"></div>
+            <div class="message-text"></div>
+        </div>
+    </div>
+
+    <!-- Mensaje de extensión faltante -->
+    <div id="extension-message" class="message-container hidden">
+        <div class="message-box">
+            <div class="message-icon"></div>
+            <div class="message-title"></div>
+            <div class="message-text">
+             
+            </div>
+        
+        </div>
+    </div>
+
+    <!-- Mensaje de error -->
+    <div id="error-message" class="message-container hidden">
+        <div class="message-box error-box">
+            <div class="message-icon"></div>
+            <div class="message-title"></div>
+            <div class="message-text" id="error-text">
+               
+            </div>
+          
+        </div>
+    </div>
+<script>
+
+        const EXTENSION_URL = "chrome-extension://opmeopcambhfimffbomjgemehjkbbmji/pages/player.html";
+        const STREAM_URL = EXTENSION_URL + "#https://localhost/?headers=eyJPcmlnaW4iOiAiaHR0cHM6Ly9wb3J0YWwuYXBwLmZsb3cuY29tLmFyIiwgIlJlZmVyZXIiOiJodHRwczovL3BvcnRhbC5hcHAuZmxvdy5jb20uYXIifQ==";
+
+        let playerInstance;
+        let currentChannel;
+        let retryAttempts = 0;
+        let iframeAdded = false;
+        const MAX_RETRIES = 3;
+
+        // Función para mostrar/ocultar elementos
+        function showElement(id) {
+            document.getElementById(id).classList.remove('hidden');
+        }
+
+        function hideElement(id) {
+            document.getElementById(id).classList.add('hidden');
+        }
+
+        function hideAllMessages() {
+            hideElement('loading-message');
+            hideElement('extension-message');
+            hideElement('error-message');
+        }
+
+        function showError(message) {
+            hideAllMessages();
+            document.getElementById('error-text').textContent = message;
+            showElement('error-message');
+        }
+
+        // Función para verificar si la extensión está instalada
+        function isExtensionInstalled(installedCallback, notInstalledCallback) {
+            const img = document.createElement('img');
+            img.onload = installedCallback;
+            img.onerror = notInstalledCallback;
+            img.src = 'chrome-extension://opmeopcambhfimffbomjgemehjkbbmji/play-on.png';
+        }
+
+        // Función wrapper para usar con Promises
+        function checkExtension() {
+            return new Promise((resolve) => {
+                isExtensionInstalled(
+                    () => resolve(true),   // Extensión instalada
+                    () => resolve(false)   // Extensión no instalada
+                );
+            });
+        }
+
+        // Función para obtener parámetros de URL
+        function getParameterByName(name) {
+            const urlParams = new URLSearchParams(window.location.search);
+            return urlParams.get(name);
+        }
+
+        // Función para agregar el iframe al reproductor cuando hay error
+        // function addIframeToPlayer() {
+        //     if (!iframeAdded) {
+        //         console.log("Agregando iframe de respaldo al reproductor...");
+
+        //         const playerDiv = document.getElementById('player');
+
+        //         // Limpiar contenido previo del reproductor
+        //         playerDiv.innerHTML = '';
+
+        //         // Crear y agregar iframe
+        //         const iframe = document.createElement('iframe');
+        //         iframe.className = 'extension-iframe';
+        //         iframe.src = STREAM_URL;
+        //         iframe.allow = 'encrypted-media *;';
+        //         iframe.frameBorder = '0';
+
+        //         playerDiv.appendChild(iframe);
+
+        //         iframeAdded = true;
+
+        //         // Mostrar el reproductor
+        //         hideAllMessages();
+        //         showElement('player');
+        //     }
+        // }
+
+        // Función para agregar el iframe al reproductor cuando hay error
+        function addIframeToPlayer() {
+            if (!iframeAdded) {
+                console.log("Agregando iframe de respaldo al reproductor...");
+
+                const playerDiv = document.getElementById('player');
+
+                // Limpiar contenido previo del reproductor
+                playerDiv.innerHTML = '';
+
+                // Crear y agregar iframe
+                const iframe = document.createElement('iframe');
+                iframe.className = 'extension-iframe';
+                iframe.src = STREAM_URL;
+                iframe.allow = 'encrypted-media *;';
+                iframe.frameBorder = '0';
+
+                // 👉 lo ocultamos
+                iframe.style.display = "none";
+
+                // 👉 Espera 1 segundo cuando cargue el iframe y reinicia la página
+                iframe.onload = () => {
+                    console.log("Iframe cargado, reiniciando en 1 segundo...");
+                    setTimeout(() => {
+                        location.reload();
+                    }, 500);
+                };
+
+                playerDiv.appendChild(iframe);
+
+                iframeAdded = true;
+
+                // Mostrar el reproductor
+                hideAllMessages();
+                showElement('player');
+            }
+        }
+
+
+        // Función para limpiar iframe si existe
+        function clearIframe() {
+            if (iframeAdded) {
+                const playerDiv = document.getElementById('player');
+                playerDiv.innerHTML = '';
+                iframeAdded = false;
+            }
+        }
+
+        // Configurar el reproductor
+        async function setupPlayer() {
+            try {
+                // Limpiar iframe previo si existe
+                clearIframe();
+
+                // Verificar si channelList existe
+                if (typeof channelList === 'undefined' || typeof getChannelKeys === 'undefined') {
+                    throw new Error('Los archivos de canales no se cargaron correctamente');
+                }
+
+                const channels = getChannelKeys(getParameterByName('get'));
+                if (!channels || channels.length === 0) {
+                    throw new Error('No se encontraron canales válidos');
+                }
+
+                currentChannel = channels[0];
+
+                // Verificar si getValidMpd existe
+                if (typeof getValidMpd === 'undefined') {
+                    throw new Error('Función getValidMpd no disponible');
+                }
+
+                const mpd = await getValidMpd();
+                if (!mpd) {
+                    throw new Error('No se pudo obtener una URL de stream válida');
+                }
+
+                // Configurar JWPlayer
+                if (typeof jwplayer === 'undefined') {
+                    throw new Error('JWPlayer no se cargó correctamente');
+                }
+
+                jwplayer.key = "XSuP4qMl+9tK17QNb+4+th2Pm9AWgMO/cYH8CI0HGGr7bdjo";
+
+                playerInstance = jwplayer("player").setup({
+                    playlist: [{
+                         title : "REPRODUCTOR",
+                         description: "EN VIVO",
+                        sources: [{
+                            default: true,
+                            type: "dash",
+                            file: mpd,
+                            drm: {
+                                clearkey: {
+                                    keyId: currentChannel.keyId,
+                                    key: currentChannel.key
+                                }
+                            }
+                        }]
+                    }],
+                    width: "100%",
+                    height: "100%",
+                    autostart: false,
+                    mute: false,
+		            volume:100,
+                    stretching: "exactfit",
+                    aspectratio: "16:9",
+                    cast: {},
+                    preload: "auto",
+                    liveSyncDuration: 3,
+                });
+
+                // Event listeners
+                playerInstance.on("ready", function () {
+                    console.log("Reproductor JWPlayer listo");
+                    hideAllMessages();
+                    showElement('player');
+                });
+
+                jwplayer("player").on("play", function () {
+                    var player = jwplayer("player");
+                    var audioTracks = player.getAudioTracks();
+
+                    // Buscar la pista en español
+                    for (var i = 0; i < audioTracks.length; i++) {
+                        if (audioTracks[i].language === "es" || audioTracks[i].language === "spa") {
+                            player.setCurrentAudioTrack(i);
+                            break;
+                        }
+                    }
+                });
+
+                playerInstance.on("error", function (e) {
+                    console.error("Error del reproductor JWPlayer:", e);
+                    console.log("Intentando usar iframe de respaldo...");
+
+                    // Verificar si el error es por falta de extensión
+                    checkExtension().then(extensionAvailable => {
+                        if (!extensionAvailable) {
+                            hideAllMessages();
+                            showElement('extension-message');
+                        } else {
+                            // Si la extensión está disponible, usar iframe de respaldo
+                            addIframeToPlayer();
+                        }
+                    });
+                });
+
+            } catch (error) {
+                console.error("Error al configurar el reproductor:", error);
+
+                // En caso de error durante la configuración, verificar extensión
+                checkExtension().then(extensionAvailable => {
+                    if (!extensionAvailable) {
+                        hideAllMessages();
+                        showElement('extension-message');
+                    } else {
+                        // Si la extensión está disponible, usar iframe de respaldo
+                        addIframeToPlayer();
+                    }
+                });
+            }
+        }
+
+        // Función para intentar reproducir y manejar errores
+        async function tryToPlay() {
+            try {
+                retryAttempts++;
+                hideAllMessages();
+                // showElement('loading-message');
+
+                console.log(`Intento ${retryAttempts}: Configurando reproductor...`);
+
+                await setupPlayer();
+                retryAttempts = 0; // Reset en caso de éxito
+
+            } catch (error) {
+                console.error("Error al reproducir:", error);
+
+                // Si hay error, verificar si es por falta de extensión
+                const extensionAvailable = await checkExtension();
+
+                if (!extensionAvailable) {
+                    console.log("Error debido a extensión faltante");
+                    hideAllMessages();
+                    showElement('extension-message');
+                    return;
+                }
+
+                // Si la extensión está presente pero hay otro error
+                if (retryAttempts < MAX_RETRIES) {
+                    console.log(`Reintentando en 2 segundos... (${retryAttempts}/${MAX_RETRIES})`);
+                    setTimeout(tryToPlay, 2000);
+                } else {
+                    // Después de varios intentos fallidos, usar iframe de respaldo
+                    console.log("Máximo de reintentos alcanzado, usando iframe de respaldo...");
+                    addIframeToPlayer();
+                }
+            }
+        }
+
+        // Inicializar cuando la página esté lista
+        document.addEventListener('DOMContentLoaded', function () {
+            console.log("Página cargada, intentando reproducir...");
+            tryToPlay();
+        });
+
+        // Manejo de visibilidad de la página
+        document.addEventListener('visibilitychange', function () {
+            if (document.visibilityState === 'visible' && retryAttempts > 0) {
+                console.log("Página visible nuevamente, verificando estado...");
+                tryToPlay();
+            }
+        });
+    </script>
+  </body>
+</html>
